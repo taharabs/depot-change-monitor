@@ -26,6 +26,10 @@ dev = ["pytest>=8", "ruff>=0.5"]
 depot-agent = "depot_monitor.agent.main:main"
 depot-simulator = "depot_monitor.demo.simulator:main"
 
+# Hosted live demo (Vercel): the whole pipeline in one process, see src/depot_monitor/demo/web.py
+[tool.vercel]
+entrypoint = "src.depot_monitor.demo.web:app"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

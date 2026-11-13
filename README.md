@@ -79,6 +79,14 @@ SOURCE_URL=sqlite:///depot.db API_URL=http://127.0.0.1:8000 API_KEY=demo-key \
 
 Try the offline queue: stop the API (terminal 1), wait, start it again, and watch the backlog arrive in order.
 
+### In one process (the hosted live demo)
+
+```bash
+uvicorn depot_monitor.demo.web:app
+```
+
+A serverless host such as Vercel can only run the API, so [`demo/web.py`](src/depot_monitor/demo/web.py) runs the rest inside it: the simulator changes a SQLite depot, the real agent code detects the changes, and the events are stored through the same code as the ingest endpoint. Operations are played when someone reads the dashboard (one every 3 seconds since the last read), and a few hours of history are played on a simulated clock at startup. Nothing is kept between restarts, and the ingest endpoint only accepts a random key generated at startup. `pyproject.toml` points Vercel at this module (`[tool.vercel] entrypoint`).
+
 ## Configuration
 
 Watched tables live in a TOML file; secrets never do. Copy `monitor.example.toml` to `monitor.toml`:
@@ -157,7 +165,7 @@ An event looks like this:
 ## Tests
 
 ```bash
-python -m pytest             # 29 unit and end-to-end tests, on SQLite, about a second
+python -m pytest             # 34 unit and end-to-end tests, on SQLite, a few seconds
 ruff check . && ruff format --check .
 ```
 
