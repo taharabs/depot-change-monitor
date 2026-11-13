@@ -1,0 +1,28 @@
+# Which tables the agent watches. Connection details are NOT stored here:
+# they come from the environment (SOURCE_URL, API_URL, API_KEY).
+
+[agent]
+source_name = "depot-01"   # shown on the dashboard
+poll_seconds = 5           # can be overridden with POLL_SECONDS
+batch_size = 200           # events per HTTPS request
+emit_initial = false       # true = report every existing row as an insert on first run
+
+[[tables]]
+name = "products"
+key = "product_id"
+
+[[tables]]
+name = "stock"
+key = ["warehouse_id", "product_id"]   # composite key
+
+[[tables]]
+name = "stock_movements"
+key = "movement_id"
+
+[[tables]]
+name = "transfers"
+key = "transfer_id"
+
+[[tables]]
+name = "transfer_lines"
+key = ["transfer_id", "line_no"]
