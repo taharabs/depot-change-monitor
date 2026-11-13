@@ -1,0 +1,67 @@
+# One-command demo: a SQL Server "depot" with synthetic activity, the agent that
+# watches it with a read-only login, and the API + dashboard on PostgreSQL.
+#
+#   docker compose up --build      then open http://localhost:8000
+#
+# The passwords below are throwaway demo values. Override them in a .env file
+# (see .env.example) and never reuse them anywhere real.
+
+x-app: &app
+  build: .
+  image: depot-change-monitor:local
+  restart: on-failure
+
+services:
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-Demo_Passw0rd1}
+
+  # Plays the warehouse software: creates the database and keeps changing it.
+  simulator:
+    <<: *app
+    command: ["depot-simulator", "--interval", "2"]
+    environment:
+      DEPOT_ADMIN_URL: mssql+pymssql://sa:${MSSQL_SA_PASSWORD:-Demo_Passw0rd1}@mssql:1433/depot
+      READER_PASSWORD: ${READER_PASSWORD:-Reader_Passw0rd1}
+    depends_on: [mssql]
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: monitor
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-monitor}
+      POSTGRES_DB: monitor
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U monitor -d monitor"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    <<: *app
+    environment:
+      DATABASE_URL: postgresql+psycopg://monitor:${POSTGRES_PASSWORD:-monitor}@postgres:5432/monitor
+      MONITOR_API_KEYS: ${MONITOR_API_KEY:-demo-key}
+      DASHBOARD_USER: ${DASHBOARD_USER:-}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
+    ports: ["8000:8000"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Runs at the depot: reads SQL Server with the read-only login, ships to the API.
+  agent:
+    <<: *app
+    command: ["depot-agent", "--config", "/app/monitor.example.toml"]
+    environment:
+      SOURCE_URL: mssql+pymssql://monitor_reader:${READER_PASSWORD:-Reader_Passw0rd1}@mssql:1433/depot
+      API_URL: http://api:8000
+      API_KEY: ${MONITOR_API_KEY:-demo-key}
+      STATE_PATH: /state/agent-state.db
+    volumes: ["agent-state:/state"]
+    depends_on: [api, simulator]
+
+volumes:
+  agent-state:
