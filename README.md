@@ -1,5 +1,6 @@
 # depot-change-monitor
 
+[![Live demo](https://img.shields.io/badge/live%20demo-Vercel-000000?logo=vercel&logoColor=white)](https://depot-change-monitor.vercel.app)
 [![CI](https://github.com/taharabs/depot-change-monitor/actions/workflows/ci.yml/badge.svg)](https://github.com/taharabs/depot-change-monitor/actions/workflows/ci.yml)
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
@@ -7,6 +8,8 @@
 **See every change made in a remote warehouse database, without touching that database.**
 
 A small Python agent sits next to the depot's SQL Server, reads it with a read-only login, works out what changed since the last look, and ships those changes over HTTPS to a FastAPI service with a live dashboard. If the depot's internet drops, changes wait in a local queue and are delivered when it comes back.
+
+**[Open the live demo →](https://depot-change-monitor.vercel.app)** A simulated warehouse changes every few seconds and the dashboard shows each change as the agent detects it ([how the demo works](#in-one-process-the-hosted-live-demo)).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/dashboard-dark.png">
