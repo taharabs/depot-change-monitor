@@ -13,6 +13,7 @@ import logging
 import os
 import random
 import time
+from collections.abc import Callable
 from decimal import Decimal
 
 from sqlalchemy import (
@@ -164,7 +165,13 @@ def _prepare_sql_server(url: str, reader_password: str | None, timeout: float) -
         scoped.dispose()
 
 
-def init_database(url: str, *, reader_password: str | None = None, timeout: float = 120) -> Engine:
+def init_database(
+    url: str,
+    *,
+    reader_password: str | None = None,
+    timeout: float = 120,
+    seeded_at: dt.datetime | None = None,
+) -> Engine:
     """Create tables and seed data if the database is empty. Safe to call again."""
     if make_url(url).get_backend_name() == "mssql":
         _prepare_sql_server(url, reader_password, timeout)
@@ -173,7 +180,7 @@ def init_database(url: str, *, reader_password: str | None = None, timeout: floa
     metadata.create_all(engine)
     with engine.begin() as connection:
         if connection.scalar(select(func.count()).select_from(products)) == 0:
-            now = _now()
+            now = seeded_at or _now()
             connection.execute(
                 insert(products),
                 [
@@ -201,12 +208,19 @@ def init_database(url: str, *, reader_password: str | None = None, timeout: floa
 class Simulator:
     """Performs one random, realistic warehouse operation per step."""
 
-    def __init__(self, engine: Engine, seed: int | None = None) -> None:
+    def __init__(
+        self,
+        engine: Engine,
+        seed: int | None = None,
+        *,
+        clock: Callable[[], dt.datetime] | None = None,
+    ) -> None:
         self.engine = engine
         self.random = random.Random(seed)
+        self._now = clock or _now  # naive UTC, like the warehouse software would store
 
     def _move(self, connection, warehouse: int, product: int, delta: int, kind: str) -> None:
-        now = _now()
+        now = self._now()
         connection.execute(
             update(stock)
             .where(stock.c.warehouse_id == warehouse, stock.c.product_id == product)
@@ -244,7 +258,7 @@ class Simulator:
                 from_warehouse=source,
                 to_warehouse=target,
                 status="draft",
-                created_at=_now(),
+                created_at=self._now(),
             )
         )
         transfer_id = result.inserted_primary_key[0]

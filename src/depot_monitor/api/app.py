@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import os
 import secrets
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -21,6 +21,7 @@ from .models import AgentStatus, Base, ChangeEvent
 from .schemas import (
     AgentOut,
     EventBatch,
+    EventIn,
     EventOut,
     Heartbeat,
     IngestResult,
@@ -38,6 +39,7 @@ class Settings:
     api_keys: frozenset[str] = field(default_factory=frozenset)
     dashboard_user: str | None = None
     dashboard_password: str | None = None
+    demo_banner: str | None = None  # HTML shown above the dashboard when set
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -76,7 +78,48 @@ def _event_out(row: ChangeEvent) -> EventOut:
     )
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def store_events(session: Session, events: Sequence[EventIn]) -> IngestResult:
+    """Store events that are not stored yet. Sending the same event twice is safe."""
+    unique = {event.event_id: event for event in events}
+    known = set(
+        session.scalars(select(ChangeEvent.event_id).where(ChangeEvent.event_id.in_(unique.keys())))
+    )
+    now = dt.datetime.now(dt.UTC)
+    fresh = [event for event_id, event in unique.items() if event_id not in known]
+    session.add_all(
+        ChangeEvent(
+            event_id=event.event_id,
+            source=event.source,
+            table_name=event.table,
+            op=event.op,
+            key=event.key,
+            before=event.before,
+            after=event.after,
+            changed_fields=event.changed_fields,
+            detected_at=event.detected_at,
+            received_at=now,
+        )
+        for event in fresh
+    )
+    session.commit()
+    return IngestResult(accepted=len(fresh), duplicates=len(events) - len(fresh))
+
+
+def record_heartbeat(session: Session, beat: Heartbeat) -> None:
+    agent = session.get(AgentStatus, beat.source) or AgentStatus(source=beat.source)
+    agent.last_seen = dt.datetime.now(dt.UTC)
+    agent.pending = beat.pending
+    agent.version = beat.version
+    session.add(agent)
+    session.commit()
+
+
+def create_app(
+    settings: Settings | None = None,
+    *,
+    before_read: Callable[[], None] | None = None,
+) -> FastAPI:
+    """Build the API. `before_read` runs before every read request (the live demo uses it)."""
     settings = settings or Settings.from_env()
     if not settings.api_keys:
         raise RuntimeError("MONITOR_API_KEYS is empty: agents could not authenticate")
@@ -93,6 +136,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version=__version__,
         description="Receives change events from depot agents and serves them to the dashboard.",
     )
+    app.state.sessions = make_session
     basic = HTTPBasic(auto_error=False)
 
     def db() -> Iterator[Session]:
@@ -107,8 +151,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     def require_reader(credentials: HTTPBasicCredentials | None = Depends(basic)) -> None:
         """Dashboard and read endpoints use HTTP Basic auth when a user is configured."""
-        if settings.dashboard_user is None:
-            return
+        if settings.dashboard_user is not None:
+            check_reader(credentials)
+        if before_read is not None:
+            before_read()
+
+    def check_reader(credentials: HTTPBasicCredentials | None) -> None:
         ok = (
             credentials is not None
             and _same(credentials.username, settings.dashboard_user)
@@ -134,31 +182,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     def ingest(batch: EventBatch, session: Session = Depends(db)) -> IngestResult:
         """Store a batch of events. Sending the same event twice is safe: it is stored once."""
-        unique = {event.event_id: event for event in batch.events}
-        known = set(
-            session.scalars(
-                select(ChangeEvent.event_id).where(ChangeEvent.event_id.in_(unique.keys()))
-            )
-        )
-        now = dt.datetime.now(dt.UTC)
-        fresh = [event for event_id, event in unique.items() if event_id not in known]
-        session.add_all(
-            ChangeEvent(
-                event_id=event.event_id,
-                source=event.source,
-                table_name=event.table,
-                op=event.op,
-                key=event.key,
-                before=event.before,
-                after=event.after,
-                changed_fields=event.changed_fields,
-                detected_at=event.detected_at,
-                received_at=now,
-            )
-            for event in fresh
-        )
-        session.commit()
-        return IngestResult(accepted=len(fresh), duplicates=len(batch.events) - len(fresh))
+        return store_events(session, batch.events)
 
     @app.post(
         "/api/v1/heartbeat",
@@ -167,12 +191,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         tags=["agent"],
     )
     def heartbeat(beat: Heartbeat, session: Session = Depends(db)) -> None:
-        agent = session.get(AgentStatus, beat.source) or AgentStatus(source=beat.source)
-        agent.last_seen = dt.datetime.now(dt.UTC)
-        agent.pending = beat.pending
-        agent.version = beat.version
-        session.add(agent)
-        session.commit()
+        record_heartbeat(session, beat)
 
     @app.get(
         "/api/v1/events",
@@ -254,6 +273,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         dependencies=[Depends(require_reader)],
     )
     def dashboard() -> str:
-        return DASHBOARD.read_text(encoding="utf-8")
+        page = DASHBOARD.read_text(encoding="utf-8")
+        if settings.demo_banner:
+            page = page.replace("<main>", "<main>\n" + settings.demo_banner, 1)
+        return page
 
     return app

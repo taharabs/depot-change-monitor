@@ -41,8 +41,11 @@ CREATE TABLE IF NOT EXISTS outbox (
 
 
 class StateStore:
-    def __init__(self, path: str = "agent-state.db") -> None:
-        self._db = sqlite3.connect(path, isolation_level=None)  # explicit transactions below
+    def __init__(self, path: str = "agent-state.db", *, any_thread: bool = False) -> None:
+        # any_thread=True lets several threads use the store; the caller must serialize calls.
+        self._db = sqlite3.connect(
+            path, isolation_level=None, check_same_thread=not any_thread
+        )  # explicit transactions below
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA synchronous=NORMAL")
         self._db.executescript(_SCHEMA)
