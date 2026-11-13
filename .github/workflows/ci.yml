@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Lint and unit tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: python -m pytest -q
+
+  sqlserver:
+    name: Integration test on SQL Server 2022
+    runs-on: ubuntu-latest
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: Ci_Passw0rd1
+        ports: ["1433:1433"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev,mssql]"
+      - run: python -m pytest -m integration -v
+        env:
+          MSSQL_ADMIN_URL: mssql+pymssql://sa:Ci_Passw0rd1@localhost:1433/depot_it
+
+  demo:
+    name: Docker Compose demo (smoke test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose up -d --build
+      - name: Wait until changes reach the API
+        run: |
+          for attempt in $(seq 1 48); do
+            total=$(curl -fsS http://localhost:8000/api/v1/stats 2>/dev/null \
+              | python3 -c "import json,sys; print(json.load(sys.stdin)['total'])" 2>/dev/null || echo 0)
+            echo "attempt $attempt: $total change(s) recorded"
+            if [ "$total" -gt 0 ]; then exit 0; fi
+            sleep 5
+          done
+          exit 1
+      - name: Logs
+        if: always()
+        run: docker compose logs --tail 60
